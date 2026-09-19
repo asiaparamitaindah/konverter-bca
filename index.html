@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ekstrak Mutasi BCA (Debet & Kredit Final)</title>
+    <!-- Memuat library PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <!-- Memuat library SheetJS yang MENDUKUNG STYLE (Wrap Text) untuk Export Excel -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            padding: 20px; 
+            background-color: #f4f7fc;
+        }
+        .container {
+            background: white;
+            padding: 25px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            max-width: 1200px;
+            margin: auto;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #005bea;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        button:hover { background-color: #0044b3; }
+        
+        /* Tombol Export Excel */
+        #btn-export {
+            background-color: #28a745;
+            display: none;
+            margin-left: 10px;
+        }
+        #btn-export:hover { background-color: #218838; }
+
+        #status { font-weight: bold; margin-bottom: 15px; font-size: 14px;}
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            font-size: 13px;
+        }
+        th, td { 
+            border: 1px solid #dcdcdc; 
+            padding: 10px; 
+            vertical-align: top;
+        }
+        th { 
+            background-color: #f0f0f0; 
+            color: #111; 
+            text-align: center;
+        }
+        .text-right { text-align: right; font-family: monospace; font-size: 14px; white-space: nowrap;}
+        .text-center { text-align: center; }
+        .keterangan { white-space: pre-wrap; line-height: 1.5; } 
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>Ekstraksi Mutasi BCA (Format Debet & Kredit Final)</h2>
+        <input type="file" id="pdf-file" accept="application/pdf">
+        <button onclick="prosesPDF()">Ekstrak Tabel</button>
+        <button id="btn-export" onclick="exportKeExcel()">Export ke Excel</button>
+        
+        <!-- Setingan Tambahan Tahun, Hilangkan .00, dan Isi 0 -->
+        <div style="margin-top: 10px; margin-bottom: 15px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap;">
+            <div>
+                <label for="input-tahun" style="font-size: 14px; color: #333; font-weight: bold;">Tahun Transaksi:</label>
+                <input type="number" id="input-tahun" placeholder="Contoh: 2026" style="padding: 5px; width: 100px; border: 1px solid #ccc; border-radius: 4px;">
+            </div>
+            <div>
+                <input type="checkbox" id="chk-remove-00" checked>
+                <label for="chk-remove-00" style="font-size: 14px; color: #333; cursor: pointer;">Hilangkan akhiran <strong>.00</strong> pada nominal</label>
+            </div>
+            <div>
+                <input type="checkbox" id="chk-isi-nol" checked>
+                <label for="chk-isi-nol" style="font-size: 14px; color: #333; cursor: pointer;">Isi <strong>0</strong> jika kolom Debet/Kredit kosong</label>
+            </div>
+        </div>
+
+        <div id="status"></div>
+
+        <table id="tabel-hasil">
+            <thead>
+                <tr>
+                    <th style="width: 80px;">TANGGAL</th>
+                    <th>KETERANGAN</th>
+                    <th style="width: 60px;">CBG</th>
+                    <th style="width: 120px;">DEBET</th>
+                    <th style="width: 120px;">KREDIT</th>
+                    <th style="width: 130px;">SALDO</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Data akan dimuat di sini -->
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        const pdfjsLib = window['pdfjs-dist/build/pdf'];
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+        const kataAbaikan = [
+            "BCA", "KCU", "ASIA PARAMITA", "JL PERNIAGAAN", "JAKARTA", "INDONESIA", 
+            "REKENING GIRO", "NO. REKENING", "HALAMAN", "PERIODE", "MATA UANG", "CATATAN", 
+            "APABILA NASABAH", "REKENING INI", "TELAH MENYETUJUI", "BCA BERHAK", 
+            "LAPORAN MUTASI", "BERSAMBUNG", "TANGGAL KETERANGAN", "SALDO AWAL:", 
+            "MUTASI CR", "MUTASI DB", "SALDO AKHIR"
+        ];
+
+        function isHeaderFooter(teks) {
+            let upper = teks.toUpperCase();
+            let noSpace = upper.replace(/\s+/g, ''); 
+
+            if (upper === "TANGGAL" || upper === "KETERANGAN" || upper === "CBG" || upper === "MUTASI" || upper === "SALDO" || upper === ":") return true;
+            
+            for (let kata of kataAbaikan) {
+                if (upper.includes(kata) || noSpace.includes(kata.replace(/\s+/g, ''))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        async function prosesPDF() {
+            const fileInput = document.getElementById('pdf-file');
+            const statusDiv = document.getElementById('status');
+            const tbody = document.querySelector('#tabel-hasil tbody');
+            const btnExport = document.getElementById('btn-export');
+
+            if (fileInput.files.length === 0) {
+                alert('Pilih file PDF mutasi BCA terlebih dahulu!');
+                return;
+            }
+
+            btnExport.style.display = 'none';
+            statusDiv.innerHTML = "<span style='color: #005bea;'>Memindai baris dan memisahkan Debet/Kredit...</span>";
+            tbody.innerHTML = ""; 
+
+            const file = fileInput.files[0];
+            const fileReader = new FileReader();
+
+            fileReader.onload = async function() {
+                const typedarray = new Uint8Array(this.result);
+                
+                try {
+                    const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                    let dataTransaksi = [];
+                    let transaksiAktif = null;
+
+                    for (let i = 1; i <= pdf.numPages; i++) {
+                        const page = await pdf.getPage(i);
+                        const textContent = await page.getTextContent();
+                        
+                        let barisY = {};
+
+                        textContent.items.forEach(item => {
+                            let text = item.str.trim();
+                            if (!text) return;
+
+                            let x = item.transform[4];
+                            let y = item.transform[5];
+                            
+                            let normalY = Object.keys(barisY).find(key => Math.abs(key - y) <= 4);
+                            if (!normalY) {
+                                normalY = y;
+                                barisY[normalY] = [];
+                            }
+                            barisY[normalY].push({ text: text, x: x });
+                        });
+
+                        let urutanY = Object.keys(barisY).map(Number).sort((a, b) => b - a);
+
+                        urutanY.forEach(y => {
+                            let items = barisY[y].sort((a, b) => a.x - b.x);
+                            
+                            let r_tanggal = "", r_cbg = "", r_mutasi = "", r_saldo = "";
+                            let ketArray = [];
+                            let hasDB = false;
+
+                            items.forEach(item => {
+                                let txt = item.text;
+                                let x = item.x;
+
+                                if (txt.match(/^\d{2}\/\d{2}$/) && x < 100) {
+                                    r_tanggal = txt;
+                                } 
+                                else if (txt.match(/^\d{4}$/) && x > 300 && x < 410) {
+                                    r_cbg = txt;
+                                } 
+                                else if (txt.match(/^-?[\d\.,]+\.\d{2}(?:\s*DB)?$/i) && x > 380) {
+                                    if (x > 500) { 
+                                        r_saldo = txt; 
+                                    } else {
+                                        r_mutasi = txt; 
+                                    }
+                                }
+                                else if (txt.toUpperCase() === "DB" && x > 380) {
+                                    hasDB = true; 
+                                }
+                                else {
+                                    ketArray.push(txt);
+                                }
+                            });
+
+                            if (hasDB && r_mutasi && !r_mutasi.toUpperCase().includes("DB")) {
+                                r_mutasi += " DB";
+                            }
+
+                            let r_keterangan = ketArray.join(" ");
+
+                            if (isHeaderFooter(r_keterangan) && !r_tanggal && !r_mutasi && !r_saldo) {
+                                return; 
+                            }
+
+                            if (r_tanggal || r_keterangan.includes("SALDO AWAL")) {
+                                if (transaksiAktif) dataTransaksi.push(transaksiAktif);
+                                
+                                let debet = "", kredit = "";
+                                if (r_mutasi.toUpperCase().includes("DB")) {
+                                    kredit = r_mutasi.replace(/DB/ig, "").trim();
+                                } else if (r_mutasi !== "") {
+                                    debet = r_mutasi;
+                                }
+
+                                transaksiAktif = {
+                                    tanggal: r_tanggal,
+                                    keterangan: r_keterangan,
+                                    cbg: r_cbg,
+                                    debet: debet,
+                                    kredit: kredit,
+                                    saldo: r_saldo
+                                };
+                            } 
+                            else if (transaksiAktif) {
+                                if (r_keterangan) transaksiAktif.keterangan += "<br>" + r_keterangan;
+                                if (r_cbg) transaksiAktif.cbg = r_cbg;
+                                
+                                if (r_mutasi) {
+                                    if (r_mutasi.toUpperCase().includes("DB")) {
+                                        transaksiAktif.kredit = r_mutasi.replace(/DB/ig, "").trim();
+                                    } else {
+                                        transaksiAktif.debet = r_mutasi;
+                                    }
+                                }
+                                
+                                if (r_saldo) transaksiAktif.saldo = r_saldo;
+                            }
+                        });
+                    }
+                    
+                    if (transaksiAktif) dataTransaksi.push(transaksiAktif);
+
+                    let hapus00 = document.getElementById('chk-remove-00').checked;
+                    let isiNol = document.getElementById('chk-isi-nol').checked;
+                    let inputTahun = document.getElementById('input-tahun').value.trim();
+
+                    dataTransaksi.forEach(data => {
+                        let textTanggal = data.tanggal;
+                        let textDebet = data.debet;
+                        let textKredit = data.kredit;
+                        let textSaldo = data.saldo;
+
+                        if (inputTahun !== "" && textTanggal.match(/^\d{2}\/\d{2}$/)) {
+                            textTanggal += "/" + inputTahun;
+                        }
+
+                        // Seting isi 0 jika kosong
+                        if (isiNol) {
+                            if (textDebet === "") textDebet = "0";
+                            if (textKredit === "") textKredit = "0";
+                        }
+
+                        // Menghilangkan koma pemisah ribuan
+                        textDebet = textDebet.replace(/,/g, '');
+                        textKredit = textKredit.replace(/,/g, '');
+                        textSaldo = textSaldo.replace(/,/g, '');
+
+                        // Menghilangkan .00 jika opsi dicentang
+                        if (hapus00) {
+                            textDebet = textDebet.replace(/\.00$/, '');
+                            textKredit = textKredit.replace(/\.00$/, '');
+                            textSaldo = textSaldo.replace(/\.00$/, '');
+                        }
+
+                        // Ubah desimal titik menjadi koma untuk tampilan di HTML
+                        if (textDebet !== "0") textDebet = textDebet.replace(/\./g, ',');
+                        if (textKredit !== "0") textKredit = textKredit.replace(/\./g, ',');
+                        textSaldo = textSaldo.replace(/\./g, ',');
+
+                        let tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td class="text-center">${textTanggal}</td>
+                            <td class="keterangan">${data.keterangan}</td>
+                            <td class="text-center">${data.cbg}</td>
+                            <td class="text-right" style="color: #005bea;">${textDebet}</td>
+                            <td class="text-right" style="color: #d93025;">${textKredit}</td>
+                            <td class="text-right">${textSaldo}</td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+
+                    statusDiv.innerHTML = `<span style="color: green;">Berhasil! Kolom telah dibagi menjadi Debet & Kredit. Total: ${dataTransaksi.length} transaksi.</span>`;
+                    
+                    if (dataTransaksi.length > 0) {
+                        btnExport.style.display = 'inline-block';
+                    }
+
+                } catch (error) {
+                    statusDiv.innerHTML = `<span style="color: red;">Gagal membaca file PDF.</span>`;
+                    console.error(error);
+                }
+            };
+
+            fileReader.readAsArrayBuffer(file);
+        }
+
+        function exportKeExcel() {
+            let tbody = document.querySelector("#tabel-hasil tbody");
+            let rows = tbody.querySelectorAll("tr");
+            
+            let dataExcel = [];
+
+            rows.forEach(row => {
+                let cells = row.querySelectorAll("td");
+                
+                if (cells.length === 6) {
+                    let tanggal = cells[0].innerText.trim();
+                    let keterangan = cells[1].innerHTML.replace(/<br\s*[\/]?>/gi, "\n").trim();
+                    let debetStr = cells[3].innerText.trim();
+                    let kreditStr = cells[4].innerText.trim();
+                    let saldoStr = cells[5].innerText.trim();
+
+                    let debet = debetStr !== "" ? parseFloat(debetStr.replace(/,/g, '.')) : "";
+                    let kredit = kreditStr !== "" ? parseFloat(kreditStr.replace(/,/g, '.')) : "";
+                    let saldo = saldoStr !== "" ? parseFloat(saldoStr.replace(/,/g, '.')) : "";
+
+                    dataExcel.push({
+                        "Tanggal": tanggal,
+                        "keterangan": keterangan,
+                        "debet": debet,
+                        "kredit": kredit,
+                        "saldo": saldo
+                    });
+                }
+            });
+
+            let worksheet = XLSX.utils.json_to_sheet(dataExcel);
+            
+            let range = XLSX.utils.decode_range(worksheet['!ref']);
+            
+            for(let R = 1; R <= range.e.r; ++R) {
+                let cell_address = {c: 1, r: R}; 
+                let cell_ref = XLSX.utils.encode_cell(cell_address);
+                if(worksheet[cell_ref]) {
+                    worksheet[cell_ref].s = { 
+                        alignment: { wrapText: true, vertical: "top" } 
+                    };
+                }
+            }
+
+            worksheet['!cols'] = [
+                { wch: 12 }, 
+                { wch: 55 }, 
+                { wch: 18 }, 
+                { wch: 18 }, 
+                { wch: 18 }  
+            ];
+
+            let workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Mutasi BCA");
+            XLSX.writeFile(workbook, "Data_Mutasi_BCA.xlsx");
+        }
+    </script>
+</body>
+</html>
