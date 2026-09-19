@@ -192,22 +192,33 @@
                                 let txt = item.text;
                                 let x = item.x;
 
+                                // Deteksi Tanggal (X < 100)
                                 if (txt.match(/^\d{2}\/\d{2}$/) && x < 100) {
                                     r_tanggal = txt;
                                 } 
-                                else if (txt.match(/^\d{4}$/) && x > 300 && x < 410) {
+                                // Deteksi Cabang / CBG (X antara 300 dan 400)
+                                else if (txt.match(/^\d{4}$/) && x > 300 && x < 400) {
                                     r_cbg = txt;
                                 } 
-                                else if (txt.match(/^-?[\d\.,]+\.\d{2}(?:\s*DB)?$/i) && x > 380) {
-                                    if (x > 500) { 
-                                        r_saldo = txt; 
+                                // Deteksi Kolom Mutasi (X antara 360 dan 500)
+                                else if (x >= 360 && x < 500) {
+                                    if (txt.toUpperCase() === "DB") {
+                                        hasDB = true;
                                     } else {
-                                        r_mutasi = txt; 
+                                        if (txt.toUpperCase().includes("DB")) {
+                                            hasDB = true;
+                                        }
+                                        let cleanTxt = txt.replace(/DB/ig, "").trim();
+                                        if (cleanTxt) {
+                                            r_mutasi = (r_mutasi + " " + cleanTxt).trim();
+                                        }
                                     }
                                 }
-                                else if (txt.toUpperCase() === "DB" && x > 380) {
-                                    hasDB = true; 
+                                // Deteksi Kolom Saldo (X >= 500)
+                                else if (x >= 500) {
+                                    r_saldo = (r_saldo + " " + txt).trim();
                                 }
+                                // Selain dari kolom di atas, merupakan Keterangan (X < 360)
                                 else {
                                     ketArray.push(txt);
                                 }
@@ -249,9 +260,13 @@
                                 if (r_mutasi) {
                                     if (r_mutasi.toUpperCase().includes("DB")) {
                                         transaksiAktif.kredit = r_mutasi.replace(/DB/ig, "").trim();
+                                        transaksiAktif.debet = "";
                                     } else {
                                         transaksiAktif.debet = r_mutasi;
                                     }
+                                } else if (hasDB && transaksiAktif.debet) {
+                                    transaksiAktif.kredit = transaksiAktif.debet;
+                                    transaksiAktif.debet = "";
                                 }
                                 
                                 if (r_saldo) transaksiAktif.saldo = r_saldo;
